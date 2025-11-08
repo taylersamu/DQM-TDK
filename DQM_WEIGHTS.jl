@@ -23,7 +23,7 @@ function DQM_weights(N::Int, a::Real, b::Real)
 
     # 1. Generate Chebyshev-Gauss-Lobatto (CGL) grid points using high precision
     X_i_big = [
-        BigFloat(a) + 0.5 * (1 - cos((i - 1) / (N - 1) * π)) * (BigFloat(b) - BigFloat(a)) for i = 1:N
+        BigFloat(a) + 0.5 * (1 - cos((i - 1) / (N - 1) * pi)) * (BigFloat(b) - BigFloat(a)) for i = 1:N
     ]
 
     # 2. Pre-calculate the M_i values for efficiency
