@@ -1,22 +1,29 @@
-# BE_DQM.jl
-
 using LinearAlgebra
 BLAS.set_num_threads(16)
 # Include the necessary helper files
 include("DQM_WEIGHTS.jl")
 include("Smooth_load.jl") # Makes the Smooth_load function available here
 
+# --- Top-Level Profiling Macro ---
+# Defined once, available to all functions in this file.
+macro time_block(profile_flag, timings_dict, name, expr)
+    return quote
+        if $(esc(profile_flag))
+            t0 = time_ns()
+            result = $(esc(expr))
+            $(esc(timings_dict))[$(esc(name))] = (time_ns() - t0) / 1e6 # Convert ns to ms
+            result
+        else
+            $(esc(expr)) # Execute code without timing
+        end
+    end
+end
+
 """
-    solve_beam_dqm( ...; load_F, load_start, load_end, load_steepness)
+    solve_beam_dqm( ...; load_F, ..., profile=false)
 
 A convenience method for the DQM solver that generates a smoothed step load internally.
-The load parameters are provided as **keyword arguments**.
-
-# Keyword Arguments
-- `load_F::Real`: The total integrated force to be applied (e.g., -100.0).
-- `load_start::Real`: The coordinate where the load begins.
-- `load_end::Real`: The coordinate where the load ends.
-- `load_steepness::Real`: A factor `s` controlling how sharp the load transition is.
+Set `profile=true` to enable performance profiling.
 """
 function solve_beam_dqm(
     N::Int,
@@ -31,25 +38,31 @@ function solve_beam_dqm(
     load_start::Real,
     load_end::Real,
     load_steepness::Real,
+    profile::Bool = false, # Pass profile flag through
 )
     # This function is a user-friendly wrapper.
-
-    # 1. Generate the grid, which is needed to create the load vector.
     _, grid = DQM_weights(N, a, b)
-
-    # 2. Call the Smooth_load function (from the included file) to create the load vector.
     load_vector = Smooth_load(grid, load_F, load_steepness, load_start, load_end)
 
-    # 3. Call the core "worker" solver below, passing it the generated load vector.
-    return solve_beam_dqm(N, a, b, E, I_z, load_vector, bc_start, bc_end, delta)
+    # Call the core solver, passing the profile flag to it
+    return solve_beam_dqm(
+        N,
+        a,
+        b,
+        E,
+        I_z,
+        load_vector,
+        bc_start,
+        bc_end,
+        delta;
+        profile = profile,
+    )
 end
 
-
 """
-    solve_beam_dqm(..., load::Vector, ...)
+    solve_beam_dqm(..., load::Vector, ...; profile=false)
 
-This is the core DQM solver. It performs the calculation once the load profile
-has been provided as a vector. It's called by the convenience function above.
+This is the core DQM solver. Set `profile=true` to enable performance profiling.
 """
 function solve_beam_dqm(
     N::Int,
@@ -57,26 +70,47 @@ function solve_beam_dqm(
     b::Real,
     E::Real,
     I_z,
-    load::Vector, # Accepts a pre-made load vector
+    load::Vector,
     bc_start::String,
     bc_end::String,
-    delta::Int,
+    delta::Int;
+    profile::Bool = false, # Optional keyword for profiling
 )
+    # --- Profiling Setup ---
+    timings = profile ? Dict{String,Float64}() : nothing
+
     # --- 1. System Setup ---
-    A1, grid = DQM_weights(N, a, b)
-    As = (A1, A1^2, A1^3, A1^4)
-    LHS = (As[2]*E * I_z) * As[2]
-    RHS = load
+    # <--- FIX 1: Declare all needed variables in the function scope, just like Timoshenko
+    local As, LHS, RHS, grid, A1
+    @time_block profile timings "System Setup" begin
+        # <--- FIX 2: Call DQM_weights ONCE and assign to outer-scope vars
+        A1, grid = DQM_weights(N, a, b)
+        As = (A1, A1^2, A1^3, A1^4)
+        LHS = (As[2] * E * I_z) * As[2]
+        RHS = load
+    end
 
     # --- 2. Apply Boundary Conditions ---
-    apply_boundary_condition!(LHS, RHS, As, bc_start, 1, 1 + delta)
-    apply_boundary_condition!(LHS, RHS, As, bc_end, N, N - delta)
+    @time_block profile timings "Boundary Conditions" begin
+        # This now correctly uses the `As`, `LHS`, `RHS` from the outer scope
+        apply_boundary_condition!(LHS, RHS, As, bc_start, 1, 1 + delta)
+        apply_boundary_condition!(LHS, RHS, As, bc_end, N, N - delta)
+    end
 
     # --- 3. Solve and Return ---
-    w = LHS \ RHS
-    return (grid, w)
-end
+    w = @time_block profile timings "Linear Solve" begin
+        LHS \ RHS
+    end
 
+    # <--- FIX 3: REMOVED the redundant, bug-causing call to DQM_weights
+    # grid, _ = DQM_weights(N, a, b) # <-- BUGGY LINE REMOVED
+
+    if profile
+        return (grid, w), timings # Returns the correct, consistent grid
+    else
+        return (grid, w) # Returns the correct, consistent grid
+    end
+end
 
 """
 Helper function to apply a boundary condition to the LHS and RHS matrices.
