@@ -1,52 +1,27 @@
 using LinearAlgebra
 
-using SparseArrays # Library for sparse matrix operations
-
-
 # It is assumed that a file named "DQM_WEIGHTS.jl" exists in the same directory.
-
 include("DQM_WEIGHTS.jl")
-
 BLAS.set_num_threads(16)
 
-
 # --- Top-Level Profiling Macro ---
-
 # Defined once, available to all functions in this file.
-
 macro time_block(profile_flag, timings_dict, name, expr)
-
     return quote
-
         if $(esc(profile_flag))
-
             t0 = time_ns()
-
             result = $(esc(expr))
-
             $(esc(timings_dict))[$(esc(name))] = (time_ns() - t0) / 1e6 # Convert ns to ms
-
             result
-
         else
-
             $(esc(expr)) # Execute code without timing
-
         end
-
     end
-
 end
-
-
 """
-
 Solves the Kirchhoff-Love plate bending equation using the Differential Quadrature Method (DQM).
-
 Set `profile=true` to enable performance profiling.
-
 """
-
 function solve_kirchhoff_love_plate_dqm(
     N_x::Int,
     N_y::Int,
@@ -57,54 +32,32 @@ function solve_kirchhoff_love_plate_dqm(
     h::Real,
     load_matrix::Matrix,
     bc_config::Dict;
-
     profile::Bool = false, # Optional keyword for profiling
 )
-
-
     # --- Profiling Setup ---
-
     timings = profile ? Dict{String,Float64}() : nothing
 
-
     # --- 1. System Setup ---
-
     local LHS, RHS, grid_x, grid_y
-
     @time_block profile timings "System Setup" begin
-
         A_x, grid_x = DQM_weights(N_x, 0, a)
-
         A_y, grid_y = DQM_weights(N_y, 0, b)
 
-
         I_x, I_y = I(N_x), I(N_y)
-
         B_x, D_x = A_x^2, A_x^4
-
         B_y, D_y = A_y^2, A_y^4
 
-
         D_rigidity = E * h^3 / (12 * (1 - nu^2))
-
         LHS = D_rigidity * (kron(D_x, I_y) + 2 * kron(B_x, B_y) + kron(I_x, D_y))
-
         RHS = reshape(load_matrix, N_x * N_y)
-
     end
-
-
     # These are needed for BCs and must be calculated outside the timed block
-
     A_x_bc, B_x_bc, C_x_bc = DQM_weights(N_x, 0, a)[1] |> x -> (x, x^2, x^3)
-
     A_y_bc, B_y_bc, C_y_bc = DQM_weights(N_y, 0, b)[1] |> y -> (y, y^2, y^3)
-
 
     # --- 2. Apply Boundary Conditions ---
 
     @time_block profile timings "Boundary Conditions" begin
-
         apply_kirchhoff_love_bc!(
             LHS,
             RHS,
@@ -115,41 +68,24 @@ function solve_kirchhoff_love_plate_dqm(
             (A_x_bc, B_x_bc, C_x_bc),
             (A_y_bc, B_y_bc, C_y_bc),
         )
-
     end
-
 
     # --- 3. Solve and Return ---
-
     solution = @time_block profile timings "Linear Solve" begin
-
         LHS \ RHS
-
     end
-
     w = reshape(solution, N_y, N_x)
 
-
     if profile
-
         return (grid_x, grid_y, w), timings
-
     else
-
         return (grid_x, grid_y, w)
-
     end
-
 end
 
-
-
 """
-
-Applies boundary conditions to the sparse system matrix (LHS) and load vector (RHS).
-
+Applies boundary conditions to the  matrix (LHS) and load vector (RHS).
 This function modifies the LHS and RHS matrices in place.
-
 """
 function apply_kirchhoff_love_bc!(
     LHS,
